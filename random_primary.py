@@ -143,7 +143,7 @@ class RandomPrimaryIdModel(models.Model):
 
         #try_key_len = self.CRYPT_KEY_LEN_MIN
         #try_since_last_key_len_increase = 0
-        while self.retry.count < self.RETRY_COUNT:
+        while self._retry_count < self.RETRY_COUNT:
             # Randomly choose a new unique key
             _id = self._make_random_key(self.CRYPT_KEY_LEN)
             sid = transaction.savepoint()       # Needed for Postgres, doesn't harm the others
