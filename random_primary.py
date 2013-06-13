@@ -40,8 +40,8 @@ import string
 import random
 
 from django.db.utils import IntegrityError
-from django.db       import models, transaction
-from django.db       import transaction
+from django.db import models, transaction
+
 
 class RandomPrimaryIdModel(models.Model):
     """
@@ -89,18 +89,20 @@ class RandomPrimaryIdModel(models.Model):
     Use _FIRSTIDCHAR and _IDCHAR to tune the characters that may appear in the key.
 
     """
-    KEYPREFIX         = ""
-    KEYSUFFIX         = ""
-    CRYPT_KEY_LEN_MIN = 5
-    CRYPT_KEY_LEN_MAX = 9
-    _FIRSTIDCHAR      = string.ascii_letters                  # First char: Always a letter
-    _IDCHARS          = string.digits + string.ascii_letters  # Letters and digits for the rest
+    KEYPREFIX = ""
+    KEYSUFFIX = ""
+    #CRYPT_KEY_LEN_MIN = 5
+    #CRYPT_KEY_LEN_MAX = 9
+    CRYPT_KEY_LEN = 6
+    RETRY_COUNT = 3
+    _FIRSTIDCHAR = string.ascii_letters                  # First char: Always a letter
+    _IDCHARS = string.digits + string.ascii_letters  # Letters and digits for the rest
 
     """ Our new ID field """
-    id = models.CharField(db_index    = True,
-                          primary_key = True,
-                          max_length  = CRYPT_KEY_LEN_MAX+1+len(KEYPREFIX)+len(KEYSUFFIX),
-                          unique      = True)
+    id = models.CharField(db_index=True,
+                          primary_key=True,
+                          max_length=CRYPT_KEY_LEN,
+                          unique=True)
 
     def __init__(self, *args, **kwargs):
         """
@@ -122,8 +124,8 @@ class RandomPrimaryIdModel(models.Model):
 
         """
         return self.KEYPREFIX + random.choice(self._FIRSTIDCHAR) + \
-               ''.join([ random.choice(self._IDCHARS) for dummy in xrange(0, key_len-1) ]) + \
-               self.KEYSUFFIX
+            ''.join([random.choice(self._IDCHARS) for dummy in xrange(0, key_len - 1)]) + \
+            self.KEYSUFFIX
 
     def save(self, *args, **kwargs):
         """
@@ -139,11 +141,11 @@ class RandomPrimaryIdModel(models.Model):
             super(RandomPrimaryIdModel, self).save(*args, **kwargs)
             return
 
-        try_key_len                     = self.CRYPT_KEY_LEN_MIN
-        try_since_last_key_len_increase = 0
-        while try_key_len <= self.CRYPT_KEY_LEN_MAX:
+        #try_key_len = self.CRYPT_KEY_LEN_MIN
+        #try_since_last_key_len_increase = 0
+        while self.retry.count < self.RETRY_COUNT:
             # Randomly choose a new unique key
-            _id = self._make_random_key(try_key_len)
+            _id = self._make_random_key(self.CRYPT_KEY_LEN)
             sid = transaction.savepoint()       # Needed for Postgres, doesn't harm the others
             try:
                 if kwargs is None:
@@ -176,19 +178,19 @@ class RandomPrimaryIdModel(models.Model):
                 msg = e.args[-1]
                 if msg.endswith("for key 'PRIMARY'") or msg == "column id is not unique" or \
                         "Key (id)=" in msg:
-                    transaction.savepoint_rollback(sid) # Needs to be done for Postgres, since
-                                                        # otherwise the whole transaction is
-                                                        # cancelled, if this is part of a larger
-                                                        # transaction.
+                    transaction.savepoint_rollback(sid)  # Needs to be done for Postgres, since
+                                                         # otherwise the whole transaction is
+                                                         # cancelled, if this is part of a larger
+                                                         # transaction.
 
-                    self._retry_count += 1              # Maintained for debugging/testing purposes
-                    try_since_last_key_len_increase += 1
-                    if try_since_last_key_len_increase == try_key_len:
+                    self._retry_count += 1               # Maintained for debugging/testing purposes
+                    #try_since_last_key_len_increase += 1
+                    #if try_since_last_key_len_increase == try_key_len:
                         # Every key-len tries, we increase the key length by 1.
                         # This means we only try a few times at the start, but then try more
                         # and more for larger key sizes.
-                        try_key_len += 1
-                        try_since_last_key_len_increase = 0
+                        # try_key_len += 1
+                        # try_since_last_key_len_increase = 0
                 else:
                     # Some other IntegrityError? Need to re-raise it...
                     raise e
@@ -201,4 +203,3 @@ class RandomPrimaryIdModel(models.Model):
 
     class Meta:
         abstract = True
-
