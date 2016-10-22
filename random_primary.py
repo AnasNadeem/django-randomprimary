@@ -42,6 +42,24 @@ import random
 from django.db.utils import IntegrityError
 from django.db import models, transaction
 
+try:
+    from south.modelsinspector import add_introspection_rules
+    add_introspection_rules([],
+                            ["^apps\.django_randomprimary\.random_primary\.RandomIdField"])
+except ImportError:
+    pass
+
+
+class RandomIdField(models.CharField):
+    def contribute_to_class(self, cls, name):
+        if self.primary_key is True:
+            assert not cls._meta.has_auto_field, "A model can't have more than one AutoField: %s %s %s; have %s" % (self, cls, name, cls._meta.auto_field)
+            super(RandomIdField, self).contribute_to_class(cls, name)
+            cls._meta.has_auto_field = True
+            cls._meta.auto_field = self
+        else:
+            super(RandomIdField, self).contribute_to_class(cls, name)
+
 
 class RandomPrimaryIdModel(models.Model):
     """
@@ -91,18 +109,19 @@ class RandomPrimaryIdModel(models.Model):
     """
     KEYPREFIX = ""
     KEYSUFFIX = ""
-    #CRYPT_KEY_LEN_MIN = 5
-    #CRYPT_KEY_LEN_MAX = 9
-    CRYPT_KEY_LEN = 6
-    RETRY_COUNT = 3
-    _FIRSTIDCHAR = string.ascii_letters                  # First char: Always a letter
-    _IDCHARS = string.digits + string.ascii_letters  # Letters and digits for the rest
+    CRYPT_KEY_LEN_MIN = 10
+    CRYPT_KEY_LEN_MAX = 10
+    _FIRSTIDCHAR = string.ascii_lowercase                  # First char: Always a letter
+    _IDCHARS = string.digits + string.ascii_lowercase  # Letters and digits for the rest
+    RETRY_LIMIT_TOTAL = 15
+    RETRY_LIMIT_KEY_LENGTH = 15
 
     """ Our new ID field """
-    id = models.CharField(db_index=True,
-                          primary_key=True,
-                          max_length=CRYPT_KEY_LEN,
-                          unique=True)
+    id = RandomIdField(db_index=True,
+                       primary_key=True,
+                       max_length=CRYPT_KEY_LEN_MAX + 1 + len(KEYPREFIX) + len(KEYSUFFIX),
+                       editable=False,
+                       unique=True)
 
     def __init__(self, *args, **kwargs):
         """
@@ -141,11 +160,11 @@ class RandomPrimaryIdModel(models.Model):
             super(RandomPrimaryIdModel, self).save(*args, **kwargs)
             return
 
-        #try_key_len = self.CRYPT_KEY_LEN_MIN
-        #try_since_last_key_len_increase = 0
-        while self._retry_count < self.RETRY_COUNT:
+        try_key_len = self.CRYPT_KEY_LEN_MIN
+        try_since_last_key_len_increase = 0
+        while (try_key_len <= self.CRYPT_KEY_LEN_MAX) and (self._retry_count <= self.RETRY_LIMIT_TOTAL):
             # Randomly choose a new unique key
-            _id = self._make_random_key(self.CRYPT_KEY_LEN)
+            _id = self._make_random_key(try_key_len)
             sid = transaction.savepoint()       # Needed for Postgres, doesn't harm the others
             try:
                 if kwargs is None:
@@ -184,13 +203,10 @@ class RandomPrimaryIdModel(models.Model):
                                                          # transaction.
 
                     self._retry_count += 1               # Maintained for debugging/testing purposes
-                    #try_since_last_key_len_increase += 1
-                    #if try_since_last_key_len_increase == try_key_len:
-                        # Every key-len tries, we increase the key length by 1.
-                        # This means we only try a few times at the start, but then try more
-                        # and more for larger key sizes.
-                        # try_key_len += 1
-                        # try_since_last_key_len_increase = 0
+                    try_since_last_key_len_increase += 1
+                    if try_since_last_key_len_increase == self.RETRY_LIMIT_KEY_LENGTH:
+                        try_key_len += 1
+                        try_since_last_key_len_increase = 0
                 else:
                     # Some other IntegrityError? Need to re-raise it...
                     raise e
