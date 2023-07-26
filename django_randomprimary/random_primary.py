@@ -42,24 +42,6 @@ import random
 from django.db.utils import IntegrityError
 from django.db import models, transaction
 
-try:
-    from south.modelsinspector import add_introspection_rules
-    add_introspection_rules([],
-                            ["^apps\.django_randomprimary\.random_primary\.RandomIdField"])
-except ImportError:
-    pass
-
-
-class RandomIdField(models.CharField):
-    def contribute_to_class(self, cls, name):
-        if self.primary_key is True:
-            assert not cls._meta.has_auto_field, "A model can't have more than one AutoField: %s %s %s; have %s" % (self, cls, name, cls._meta.auto_field)
-            super(RandomIdField, self).contribute_to_class(cls, name)
-            cls._meta.has_auto_field = True
-            cls._meta.auto_field = self
-        else:
-            super(RandomIdField, self).contribute_to_class(cls, name)
-
 
 class RandomPrimaryIdModel(models.Model):
     """
@@ -109,19 +91,16 @@ class RandomPrimaryIdModel(models.Model):
     """
     KEYPREFIX = ""
     KEYSUFFIX = ""
-    CRYPT_KEY_LEN_MIN = 10
-    CRYPT_KEY_LEN_MAX = 10
-    _FIRSTIDCHAR = string.ascii_lowercase                  # First char: Always a letter
-    _IDCHARS = string.digits + string.ascii_lowercase  # Letters and digits for the rest
-    RETRY_LIMIT_TOTAL = 15
-    RETRY_LIMIT_KEY_LENGTH = 15
+    CRYPT_KEY_LEN_MIN = 5
+    CRYPT_KEY_LEN_MAX = 9
+    _FIRSTIDCHAR = string.ascii_letters                  # First char: Always a letter
+    _IDCHARS = string.digits + string.ascii_letters  # Letters and digits for the rest
 
     """ Our new ID field """
-    id = RandomIdField(db_index=True,
-                       primary_key=True,
-                       max_length=CRYPT_KEY_LEN_MAX + 1 + len(KEYPREFIX) + len(KEYSUFFIX),
-                       editable=False,
-                       unique=True)
+    id = models.CharField(db_index=True,
+                          primary_key=True,
+                          max_length=CRYPT_KEY_LEN_MAX + 1 + len(KEYPREFIX) + len(KEYSUFFIX),
+                          unique=True)
 
     def __init__(self, *args, **kwargs):
         """
@@ -142,9 +121,9 @@ class RandomPrimaryIdModel(models.Model):
         to the generated key.
 
         """
-        return self.KEYPREFIX + random.choice(self._FIRSTIDCHAR) + \
-            ''.join([random.choice(self._IDCHARS) for dummy in range(0, key_len - 1)]) + \
-            self.KEYSUFFIX
+        return (self.KEYPREFIX + random.choice(self._FIRSTIDCHAR) +
+                ''.join([random.choice(self._IDCHARS) for dummy in range(0, key_len - 1)]) +
+                self.KEYSUFFIX)
 
     def save(self, *args, **kwargs):
         """
@@ -162,18 +141,17 @@ class RandomPrimaryIdModel(models.Model):
 
         try_key_len = self.CRYPT_KEY_LEN_MIN
         try_since_last_key_len_increase = 0
-        while (try_key_len <= self.CRYPT_KEY_LEN_MAX) and (self._retry_count <= self.RETRY_LIMIT_TOTAL):
+        while try_key_len <= self.CRYPT_KEY_LEN_MAX:
             # Randomly choose a new unique key
             _id = self._make_random_key(try_key_len)
             sid = transaction.savepoint()       # Needed for Postgres, doesn't harm the others
             try:
                 if kwargs is None:
                     kwargs = dict()
-                kwargs['force_insert'] = True           # If force_insert is already present in
-                                                        # kwargs, we want to make sure it's
-                                                        # overwritten. Also, by putting it here
-                                                        # we can be sure we don't accidentally
-                                                        # specify it twice.
+                kwargs['force_insert'] = True
+                # If force_insert is already present in kwargs, we want to make sure it's
+                # overwritten. Also, by putting it here, we can be sure we don't accidentally
+                # specify it twice.
                 self.id = _id
                 super(RandomPrimaryIdModel, self).save(*args, **kwargs)
                 break                                   # This was a success, so we are done here
@@ -197,14 +175,16 @@ class RandomPrimaryIdModel(models.Model):
                 msg = e.args[-1]
                 if msg.endswith("for key 'PRIMARY'") or msg == "column id is not unique" or \
                         "Key (id)=" in msg:
-                    transaction.savepoint_rollback(sid)  # Needs to be done for Postgres, since
-                                                         # otherwise the whole transaction is
-                                                         # cancelled, if this is part of a larger
-                                                         # transaction.
+                    transaction.savepoint_rollback(sid)
+                    # Needs to be done for Postgres, since otherwise the whole transaction is
+                    # cancelled, if this is part of a larger transaction.
 
-                    self._retry_count += 1               # Maintained for debugging/testing purposes
+                    self._retry_count += 1              # Maintained for debugging/testing purposes
                     try_since_last_key_len_increase += 1
-                    if try_since_last_key_len_increase == self.RETRY_LIMIT_KEY_LENGTH:
+                    if try_since_last_key_len_increase == try_key_len:
+                        # Every key-len tries, we increase the key length by 1.
+                        # This means we only try a few times at the start, but then try more
+                        # and more for larger key sizes.
                         try_key_len += 1
                         try_since_last_key_len_increase = 0
                 else:
