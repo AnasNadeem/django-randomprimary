@@ -43,6 +43,15 @@ from django.db.utils import IntegrityError
 from django.db import models, transaction
 
 
+class RandomIdField(models.CharField):
+    def contribute_to_class(self, cls, name):
+        if self.primary_key is True:
+            super(RandomIdField, self).contribute_to_class(cls, name)
+            cls._meta.auto_field = self
+        else:
+            super(RandomIdField, self).contribute_to_class(cls, name)
+
+
 class RandomPrimaryIdModel(models.Model):
     """
     An abstract base class, which provides a random looking primary key for Django models.
@@ -97,10 +106,11 @@ class RandomPrimaryIdModel(models.Model):
     _IDCHARS = string.digits + string.ascii_letters  # Letters and digits for the rest
 
     """ Our new ID field """
-    id = models.CharField(db_index=True,
-                          primary_key=True,
-                          max_length=CRYPT_KEY_LEN_MAX + 1 + len(KEYPREFIX) + len(KEYSUFFIX),
-                          unique=True)
+    id = RandomIdField(db_index=True,
+                       primary_key=True,
+                       max_length=CRYPT_KEY_LEN_MAX + 1 + len(KEYPREFIX) + len(KEYSUFFIX),
+                       editable=False,
+                       unique=True)
 
     def __init__(self, *args, **kwargs):
         """
